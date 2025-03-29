@@ -1,11 +1,10 @@
 import discord
 from discord.ext import commands
 from discord.ui import Select, View, Button
-from selenium import webdriver
+import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.firefox.options import Options
 import json
 from bs4 import BeautifulSoup
 import ebooklib
@@ -15,6 +14,7 @@ import logging
 import time
 import threading
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -26,26 +26,27 @@ intents.message_content = True
 # Create the bot instance
 bot = commands.Bot(command_prefix='?', intents=intents)
 
+# Define SafeChrome
+class SafeChrome(uc.Chrome):
+    def __del__(self):
+        pass
+
 # Global browser management
 class BrowserManager:
     def __init__(self):
         self.browser = None
         self.timer = None
-        self.lock = threading.Lock()  # Ensure thread-safe access to browser
-        self.inactivity_timeout = 300  # 5 minutes in seconds
+        self.lock = threading.Lock()
+        self.inactivity_timeout = 300  # 5 minutes
 
     def get_browser(self):
-        """Get or create the browser instance and reset the inactivity timer."""
         with self.lock:
             if self.browser is None:
                 logging.info("Opening new browser instance")
-                options = Options()
-                options.add_argument('--headless')
-                options.set_preference("toolkit.telemetry.enabled", False)
-                options.set_preference("datareporting.healthreport.uploadEnabled", False)
-                options.set_preference("datareporting.policy.dataSubmissionEnabled", False)
-                options.set_preference("network.trr.mode", 5)
-                self.browser = webdriver.Firefox(options=options)
+                options = uc.ChromeOptions()
+                options.add_argument('--no-sandbox')
+                options.add_argument('--disable-dev-shm-usage')
+                self.browser = SafeChrome(options=options)
                 self.browser.get('https://www.patreon.com/')
                 try:
                     with open('cookies.json', 'r') as file:
@@ -59,14 +60,12 @@ class BrowserManager:
             return self.browser
 
     def _reset_timer(self):
-        """Reset the inactivity timer."""
         if self.timer:
             self.timer.cancel()
         self.timer = threading.Timer(self.inactivity_timeout, self._close_browser)
         self.timer.start()
 
     def _close_browser(self):
-        """Close the browser after inactivity."""
         with self.lock:
             if self.browser:
                 logging.info("Closing browser due to inactivity")
@@ -75,7 +74,6 @@ class BrowserManager:
             self.timer = None
 
     def shutdown(self):
-        """Forcefully close the browser on bot shutdown."""
         with self.lock:
             if self.browser:
                 logging.info("Shutting down browser")
@@ -85,12 +83,13 @@ class BrowserManager:
                 self.timer.cancel()
                 self.timer = None
 
-# Instantiate the browser manager
+# Instantiate browser manager
 browser_manager = BrowserManager()
+executor = ThreadPoolExecutor(max_workers=1)  # Single thread for Selenium
 
 class ChapterSelectView(View):
     def __init__(self, chapters, ctx):
-        super().__init__(timeout=300)  # 5-minute timeout for interaction
+        super().__init__(timeout=300)
         self.chapters = chapters
         self.ctx = ctx
         self.selected_chapters = []
@@ -130,9 +129,10 @@ class ChapterSelectView(View):
             await interaction.response.send_message("No chapters selected.", ephemeral=True)
             return
         await interaction.response.defer()
-        await interaction.followup.send("Fetching selected chapters and creating EPUB...", ephemeral=True)
+        # Offload EPUB creation to a thread
+        future = executor.submit(create_epub, self.selected_chapters)
         try:
-            epub_file = create_epub(self.selected_chapters)
+            epub_file = future.result(timeout=600)  # 10-minute timeout
             if epub_file:
                 await interaction.followup.send(file=discord.File(epub_file, os.path.basename(epub_file)))
                 os.remove(epub_file)
@@ -144,7 +144,6 @@ class ChapterSelectView(View):
 
 @bot.command()
 async def fetch(ctx, url: str):
-    """Fetch Patreon chapters and allow selection via dropdown."""
     await ctx.send("Fetching chapters, please wait...")
     chapters = await fetch_chapters(url)
     if not chapters:
@@ -156,7 +155,6 @@ async def fetch(ctx, url: str):
     await ctx.send("Select the chapters you want to download:", view=view)
 
 async def fetch_chapters(url):
-    """Fetch chapter titles and URLs from Patreon."""
     browser = browser_manager.get_browser()
     try:
         browser.get(url)
@@ -180,11 +178,11 @@ async def fetch_chapters(url):
         return []
 
 def fetch_chapter_content(browser, url):
-    """Fetch content of a single chapter using the browser instance."""
     retries = 3
     for attempt in range(retries):
         try:
-            browser.get(f'https://www.patreon.com{url}')
+            full_url = f'https://www.patreon.com{url}'
+            browser.get(full_url)
             wait = WebDriverWait(browser, 15)
             script_element = wait.until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, 'script#__NEXT_DATA__'))
@@ -197,36 +195,32 @@ def fetch_chapter_content(browser, url):
                 attributes = bootstrap['post']['data']['attributes']
                 if 'content' in attributes:
                     return attributes['content']
+            logging.warning(f"No content found in JSON at {full_url}")
             return None
         except Exception as e:
             logging.warning(f"Attempt {attempt + 1} failed for URL {url}: {e}")
+            # Debug: Log page source on failure
             if attempt == retries - 1:
-                logging.error(f"Failed to fetch content for {url} after {retries} attempts.")
-                return None
+                logging.error(f"Failed after {retries} attempts. Page source: {browser.page_source[:500]}...")
             time.sleep(2)
+    return None
 
 def sanitize_filename(filename):
-    """Sanitize a filename by removing invalid characters."""
     return re.sub(r'[^\w\s-]', '', filename).strip() or "untitled"
 
 def generate_filename(chapters):
-    """Generate a filename based on the first and last chapters (after reversal)."""
     if not chapters:
         return "empty_chapters"
-    # After reversal, chapters[0] is oldest, chapters[-1] is newest
-    oldest = chapters[0][0]  # Title of first (oldest) chapter
-    newest = chapters[-1][0]  # Title of last (newest) chapter
+    oldest = chapters[0][0]
+    newest = chapters[-1][0]
     return f"{sanitize_filename(oldest[:15])}-{sanitize_filename(newest[:15])}.epub" if len(chapters) > 1 else f"{sanitize_filename(newest)}.epub"
 
 def create_epub(chapters):
-    """Create an EPUB file from selected chapters using the browser instance."""
     browser = browser_manager.get_browser()
     try:
         book = epub.EpubBook()
         book.set_language("en")
         book.set_title("Patreon Chapters")
-
-        # Reverse chapters: most recent (first in list) becomes last in EPUB
         reversed_chapters = list(reversed(chapters))
         epub_chapters = []
 
