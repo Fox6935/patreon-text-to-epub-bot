@@ -1,14 +1,20 @@
-from selenium import webdriver
+import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import time
 import json
 
-email= "Replace_with_email"
-password= "Replace_with_password"
+email = "Replace_with_email"
+password = "Replace_with_password"
 
-browser = webdriver.Firefox()
+# Define SafeChrome to avoid cleanup errors
+class SafeChrome(uc.Chrome):
+    def __del__(self):
+        pass
+
+# Initialize browser with undetected_chromedriver
+browser = SafeChrome()
 
 browser.get('https://www.patreon.com/login')
 
