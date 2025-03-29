@@ -1,17 +1,16 @@
 # Patreon Chapter Downloader Bot
 
-A Discord bot that fetches chapters from Patreon posts and compiles them into an EPUB file. The bot provides an interactive dropdown menu for selecting chapters and generates an EPUB with chapters ordered from oldest to newest. It uses Selenium for web scraping and maintains a persistent browser session for efficiency.
+A Discord bot that fetches chapters from Patreon posts and compiles them into an EPUB file. The bot provides an interactive dropdown menu for selecting chapters and generates an EPUB with chapters ordered from oldest to newest. It uses `undetected_chromedriver` for stealthy web scraping and maintains a persistent browser session for efficiency.
 
 ## Features
 - **Interactive Chapter Selection**: Select posts via a Discord dropdown menu (up to 20 chapters).
-- **EPUB Generation**: Downloads selected posts and compiles them into a single EPUB file.
-- **Persistent Browser**: Uses a single Firefox browser instance with a 5-minute inactivity timeout to reduce overhead.
+- **EPUB Generation**: Downloads selected posts and compiles them into a single EPUB file in a separate thread to avoid blocking the bot.
+- **Persistent Browser**: Uses a single Chrome browser instance with a 5-minute inactivity timeout to reduce overhead.
 - **Dynamic Filenames**: EPUB filenames are generated based on the first and last chapter titles with a character limit.
 
 ## Prerequisites
 - **Python 3.8+**
-- **Firefox Browser** (for Selenium WebDriver)
-- **Geckodriver** (compatible with your Firefox version)
+- **Google Chrome Browser** (for `undetected_chromedriver`)
 - **Patreon Account Cookies** (for authentication)
 - **Discord Bot Token**
 
@@ -20,22 +19,20 @@ A Discord bot that fetches chapters from Patreon posts and compiles them into an
 ### 1. Install Dependencies
 Install the required Python packages using pip:
 ```bash
-pip install discord.py selenium beautifulsoup4 ebooklib
+pip install discord.py undetected-chromedriver beautifulsoup4 ebooklib
 ```
 
-### 2. Install Geckodriver
-Download the appropriate version of [Geckodriver](https://github.com/mozilla/geckodriver/releases) for your system and add it to your system's PATH:
-- **Windows**: Place `geckodriver.exe` in a directory like `C:\Program Files\Geckodriver` and add it to PATH.
-- **Linux/Mac**: Place `geckodriver` in `/usr/local/bin` or similar.
+### 2. Prepare Chrome
+Ensure Google Chrome is installed in a default location (e.g., `C:\Program Files\Google\Chrome\Application\chrome.exe` on Windows, `/usr/bin/google-chrome` on Linux). `undetected_chromedriver` automatically downloads and patches ChromeDriver.
 
 ### 3. Prepare Patreon Cookies
-The bot currently doesn't have a login option and requires a cookies.json file with authenticated cookies to access Patreon content:
-1. Log into Patreon using Firefox.
-2. Use a browser extension (e.g., "Export Cookies") to export your cookies as a JSON file.
+The bot requires a `cookies.json` file with authenticated cookies to access Patreon content:
+1. Log into Patreon using Chrome.
+2. Use a browser extension (e.g., "EditThisCookie") to export your cookies as a JSON file.
 3. Save the file as `cookies.json` in the project directory.
 
-- **Note**: Ensure the cookies grant access to the Patreon content you want to fetch. Cookies may expire, requiring periodic updates.
-- **Alternativly**: Use the get-cookies.py file and replace the email and password with for patreon login details and it will generate a cookies.json file for you.
+- **Note**: Ensure cookies include a valid `session_id` and grant access to desired content. Cookies may expire (e.g., `__cf_bm` expires March 3, 2026, at 07:24:05 UTC), requiring updates.
+- **Alternatively**: Use the script `get-cookies.py` with your Patreon login details to generate `cookies.json`.
 
 ### 4. Set Up Discord Bot Token
 1. Create a bot in the [Discord Developer Portal](https://discord.com/developers/applications).
@@ -75,15 +72,16 @@ python bot.py
 
 ## Dependencies
 - `discord.py`: For Discord bot functionality.
-- `selenium`: For web scraping Patreon content.
+- `undetected_chromedriver`: For stealthy web scraping of Patreon content.
 - `beautifulsoup4`: For parsing HTML content.
 - `ebooklib`: For generating EPUB files.
 
 ## Troubleshooting
-- **Browser Not Opening**: Ensure `geckodriver` is installed and in your PATH, and Firefox is installed.
-- **Invalid Cookies**: If chapters fail to load, verify that `cookies.json` contains valid Patreon cookies. Update cookies by re-exporting them from Firefox.
+- **Browser Not Opening**: Ensure Chrome is installed in a default location. Check logs for ChromeDriver errors.
+- **Invalid Cookies**: If chapters fail to load, verify `cookies.json` contains valid Patreon cookies. Update by re-exporting from Chrome.
 - **Network Issues**: The bot retries failed requests three times with a 2-second delay. Check logs (`INFO`, `WARNING`, `ERROR`) for details.
 - **File Size Limits**: Discord has an 8MB file upload limit (25MB/100MB for boosted servers). Large EPUBs may fail to upload.
+- **Heartbeat Blocked**: Threading ensures Selenium doesn’t block the Discord event loop; verify no delays in logs.
 
 ## Logging
 The bot logs activity to the console:
@@ -92,8 +90,9 @@ The bot logs activity to the console:
 - `ERROR`: Critical failures (e.g., unable to create EPUB).
 
 ## Notes
-- **Browser Management**: The bot uses a single Firefox instance that closes after 5 minutes of inactivity to conserve resources.
-- **Chapter Limit**: The bot is capped at 20 chapters per fetch to fit within Discord's dropdown menu limits.
+- **Browser Management**: Uses a single Chrome instance that closes after 5 minutes of inactivity to conserve resources. Runs EPUB creation in a separate thread.
+- **Chapter Limit**: Capped at 20 chapters per fetch to fit Discord's dropdown menu limits.
+- **Stealth**: `undetected_chromedriver` bypasses many bot detection methods; avoid headless mode if Patreon blocks it.
 
 ## Contributing
 Contributions are welcome! Please open an issue or submit a pull request with your changes.
